@@ -22,8 +22,6 @@
 # Beginning of multi stage Dockerfile
 ################################################################################
 
-{% set tarball = 'elasticsearch-oss-%s-linux-x86_64.tar.gz' % elastic_version -%}
-
 {% if artifacts_dir %}
 {% set artifact_repo_url = 'file:///%s' % artifacts_dir -%}
 {% endif %}
@@ -55,17 +53,26 @@ USER 1000
 COPY --chown=1000:0 {{ '%s/' % artifacts_dir }} {{ artifacts_dir }}
 {% endif %}
 
-RUN rm -rf /tmp/plugins && mkdir /tmp/plugins
-ADD plugins /tmp/plugins/
-
 ################################################################################
 
 # Set WORKDIR here
-WORKDIR /usr/share/elasticsearch
+ARG ODFE_HOME=/usr/share/elasticsearch
+ARG SECURITY_PLUGIN_DIR=$ODFE_HOME/plugins/opendistro_security 
+#ARG PERFORMANCE_ANALYZER_PLUGIN_DIR=$ODFE_HOME/plugins/opensearch-performance-analyzer 
+WORKDIR $ODFE_HOME
 
-# Download and extract defined ES version.
-RUN curl -fsSL {{ elastic_artifacts_url }}/{{ tarball }} | \
-    tar zx --strip-components=1
+# Run the tarball
+COPY --chown=1000:0 opendistroforelasticsearch-1.13.2-linux-x64.tar.gz /tmp/
+
+RUN ls -l /tmp/ && \
+    tar -xzpf /tmp/opendistroforelasticsearch-1.13.2-linux-x64.tar.gz -C $ODFE_HOME --strip-components=1 && \
+    #mkdir -p $ODFE_HOME/data && chown -Rv 1000:0 $ODFE_HOME/data && \
+    if [[ -d $SECURITY_PLUGIN_DIR ]] ; then chmod -v 750 $SECURITY_PLUGIN_DIR/tools/* ; fi && \
+    #if [[ -d $PERFORMANCE_ANALYZER_PLUGIN_DIR ]] ; then cp -v /tmp/performance-analyzer.properties $PERFORMANCE_ANALYZER_PLUGIN_DIR/pa_config/; fi && \
+    #cp -v $TEMP_DIR/opensearch-docker-entrypoint.sh /tmp/opensearch-onetime-setup.sh $OPENSEARCH_HOME/ && \
+    #cp -v $TEMP_DIR/log4j2.properties $TEMP_DIR/opensearch.yml $OPENSEARCH_HOME/config/ && \
+    ls -l $ODFE_HOME && \
+    rm -rf /tmp/opendistroforelasticsearch-1.13.2-linux-x64.tar.gz
 
 RUN set -ex && for esdirs in config data logs; do \
         mkdir -p "$esdirs"; \
@@ -78,42 +85,7 @@ ENV JAVA_HOME /opt/jdk
 ENV PATH $PATH:$JAVA_HOME/bin
 RUN java -version && echo CURR_DIR && pwd
 
-# Compile the C-library for kNN
 USER 1000
-RUN set -ex; \
-    export KNN_VERSION=`git ls-remote --tags "https://github.com/opendistro-for-elasticsearch/k-NN" v* | grep $(echo {{version_tag}} | sed -E "s/.[0-9]+$//g") | grep -oh "v[0-9.]*" | sort | tail -n 1` \
-    && git ls-remote --tags https://github.com/opendistro-for-elasticsearch/k-NN.git v* \
-    && echo KNN_VERSION $KNN_VERSION \
-    && git clone --recursive --branch $KNN_VERSION https://github.com/opendistro-for-elasticsearch/k-NN.git /usr/share/elasticsearch/k-NN \
-    && cd /usr/share/elasticsearch/k-NN/jni \
-    && sed -i 's/-march=native/-march=x86-64/g' external/nmslib/similarity_search/CMakeLists.txt \
-    && cmake . \
-    && make \
-    && mkdir /tmp/jni/ && cp release/*.so /tmp/jni/ && ls -ltr /tmp/jni/ \
-    && rm -rf /usr/share/elasticsearch/k-NN
-
-# Bust cache for wgets
-ENV BUST_CACHE {{ bust_cache }}
-
-# Install the required modules
-#RUN for plugin_path in {{ plugin_url_paths }}; do \
-RUN for plugin_path in `cat /tmp/plugins/plugins_elasticsearch.list`; do \
-      elasticsearch-plugin install --batch file:/tmp/plugins/$plugin_path; \
-    done
-
-# Pull performance analyzer agent(RCA) from the plugin directory out into ESHOME and make the agent executable.
-RUN perf_dir=`ls -p plugins/ | grep performance`; \
-    rca_dir=`ls -p plugins/$perf_dir | grep rca/`; \
-    perf_rca_dir=plugins/$perf_dir$rca_dir; \
-    echo perf_rca_dir $perf_rca_dir; \
-    if [ -d "$perf_rca_dir" ]; then \
-    mv -v $perf_rca_dir ./ && \
-    chmod 755 performance-analyzer-rca/pa_bin/performance-analyzer-agent; fi
-
-# Make the certificate installer script executable. This script has to be executed before ES is started.
-RUN security=`ls -p plugins/ | grep security` && \
-    if [ ! -z "$security" ]; then chmod +x plugins/$security/tools/install_demo_configuration.sh; echo "Security plugin installed"; \
-    else echo "Security plugin is not yet installed"; fi
 
 COPY --chown=1000:0 elasticsearch.yml log4j2.properties config/
 
@@ -122,10 +94,6 @@ USER 0
 # Set gid to 0 for opendistroforelasticsearch and make group permission similar to that of user
 RUN chown -R elasticsearch:0 . && \
     chmod -R g=u /usr/share/elasticsearch
-
-RUN pfa=`ls -p plugins/ | grep performance` && \ 
-    if [ ! -z "$pfa" ]; then chmod 755 plugins/$pfa/pa_bin/performance-analyzer-agent; echo "Performance Analyzer plugin installed"; \
-    else echo "Performace Analyzer plugin is not yet installed"; fi
 
 RUN chmod -R 755 /dev/shm
 ################################################################################
@@ -152,7 +120,8 @@ RUN \
                   jq \
                   rsync && \
   yum clean all && \
-  easy_install supervisor
+  curl -SL https://files.pythonhosted.org/packages/d3/7f/c780b7471ba0ff4548967a9f7a8b0bfce222c3a496c3dfad0164172222b0/supervisor-4.2.2.tar.gz#sha256=5b2b8882ec8a3c3733cce6965cc098b6d80b417f21229ab90b18fe551d619f90 -o /tmp/supervisor-4.2.2.tar.gz && \
+  easy_install /tmp/supervisor-4.2.2.tar.gz
 
 RUN yum update -y && \
     yum install -y nc unzip wget which && \
@@ -182,7 +151,7 @@ RUN mkdir -p /usr/share/supervisor/performance_analyzer/ && \
 
 WORKDIR /usr/share/elasticsearch
 COPY --from=prep_es_files --chown=1000:0 /usr/share/elasticsearch /usr/share/elasticsearch
-COPY --from=prep_es_files /tmp/jni/libKNNIndex*.so /usr/lib
+#COPY --from=prep_es_files /tmp/jni/libKNNIndex*.so /usr/lib
 
 ENV PATH /usr/share/elasticsearch/bin:$PATH
 
