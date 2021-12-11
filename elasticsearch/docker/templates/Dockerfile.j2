@@ -135,7 +135,8 @@ RUN \
                   rsync && \
   yum clean all && \
   curl -SL https://files.pythonhosted.org/packages/d3/7f/c780b7471ba0ff4548967a9f7a8b0bfce222c3a496c3dfad0164172222b0/supervisor-4.2.2.tar.gz#sha256=5b2b8882ec8a3c3733cce6965cc098b6d80b417f21229ab90b18fe551d619f90 -o /tmp/supervisor-4.2.2.tar.gz && \
-  easy_install /tmp/supervisor-4.2.2.tar.gz
+  easy_install /tmp/supervisor-4.2.2.tar.gz && \
+  rm -vf /tmp/supervisor-4.2.2.tar.gz
 
 RUN yum update -y && \
     yum install -y nc unzip wget which && \
@@ -165,7 +166,7 @@ RUN mkdir -p /usr/share/supervisor/performance_analyzer/ && \
 
 WORKDIR /usr/share/elasticsearch
 COPY --from=prep_es_files --chown=1000:0 /usr/share/elasticsearch /usr/share/elasticsearch
-#COPY --from=prep_es_files /tmp/jni/libKNNIndex*.so /usr/lib
+COPY --from=prep_es_files /tmp/jni/libKNNIndex*.so /usr/lib
 
 ENV PATH /usr/share/elasticsearch/bin:$PATH
 
